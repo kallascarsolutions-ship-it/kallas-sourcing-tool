@@ -85,6 +85,31 @@ def parse_price(text: str) -> float | None:
         return None
 
 
+def _parse_as24_next_data(raw_text: str, car_name: str) -> tuple[list, int]:
+    try:
+        data = json.loads(raw_text)
+        page_props = data.get("props", {}).get("pageProps", {})
+        num_results = page_props.get("numberOfResults", 0)
+        raw = (
+            page_props.get("listings")
+            or page_props.get("searchResults", {}).get("listings")
+            or page_props.get("data", {}).get("listings")
+            or []
+        )
+        return raw or [], num_results
+    except (json.JSONDecodeError, AttributeError):
+        return [], 0
+
+
+def _read_next_data(page) -> str | None:
+    return page.evaluate("""
+        () => {
+            const el = document.getElementById('__NEXT_DATA__');
+            return el ? el.textContent : null;
+        }
+    """)
+
+
 def fetch_autoscout24(page, car: dict) -> list[dict]:
     url = car["autoscout24_url"]
     keyword = car["search_query"].lower()
@@ -94,77 +119,71 @@ def fetch_autoscout24(page, car: dict) -> list[dict]:
     try:
         page.goto(url, timeout=30000, wait_until="domcontentloaded")
         time.sleep(3)
+
+        # Read BEFORE consent — dismissal can trigger a reload that clears listings from SSR data
+        pre_raw = _read_next_data(page)
+        raw, num_results = _parse_as24_next_data(pre_raw, car_name) if pre_raw else ([], 0)
+        logger.info(f"AutoScout24 pre-consent: {len(raw)} items, numberOfResults={num_results} for {car_name}")
+
         dismiss_consent(page, "AutoScout24")
         time.sleep(2)
 
+        # If pre-consent had data, use it; otherwise try again post-consent
+        if not raw:
+            post_raw = _read_next_data(page)
+            raw, num_results = _parse_as24_next_data(post_raw, car_name) if post_raw else ([], 0)
+            logger.info(f"AutoScout24 post-consent: {len(raw)} items, numberOfResults={num_results} for {car_name}")
+
         page.screenshot(path=str(SCREENSHOTS_DIR / f"as24_{car_name.replace(' ', '_')}.png"))
 
-        next_data_raw = page.evaluate("""
-            () => {
-                const el = document.getElementById('__NEXT_DATA__');
-                return el ? el.textContent : null;
-            }
-        """)
-
-        if next_data_raw:
+        if raw:
             try:
-                data = json.loads(next_data_raw)
-                page_props = data.get("props", {}).get("pageProps", {})
+                logger.info(f"AutoScout24 first item keys: {list(raw[0].keys())}")
+            except Exception:
+                pass
 
-                # Log top-level keys to help debug structure changes
-                logger.info(f"AutoScout24 __NEXT_DATA__ pageProps keys: {list(page_props.keys())}")
+        logger.info(f"AutoScout24 __NEXT_DATA__: {len(raw)} raw items for {car_name}")
 
-                # Try multiple known paths for listings
-                raw = (
-                    page_props.get("listings")
-                    or page_props.get("searchResults", {}).get("listings")
-                    or page_props.get("data", {}).get("listings")
-                    or []
+        for item in raw:
+            try:
+                vehicle = item.get("vehicle", {})
+                make = vehicle.get("make", "")
+                model = vehicle.get("model", "")
+                version = vehicle.get("modelVersionInput", "")
+                title = " ".join(filter(None, [make, model, version])).strip()
+
+                keyword_parts = keyword.split()
+                if not all(k in title.lower() for k in keyword_parts[-2:]):
+                    continue
+
+                price_raw = (
+                    item.get("prices", {})
+                        .get("public", {})
+                        .get("priceRaw")
                 )
-                logger.info(f"AutoScout24 __NEXT_DATA__: {len(raw)} raw items for {car_name}")
+                if not price_raw:
+                    continue
 
-                for item in raw:
-                    try:
-                        vehicle = item.get("vehicle", {})
-                        make = vehicle.get("make", "")
-                        model = vehicle.get("model", "")
-                        version = vehicle.get("modelVersionInput", "")
-                        title = " ".join(filter(None, [make, model, version])).strip()
+                price_eur = float(price_raw)
+                mileage = vehicle.get("mileage", "N/A")
+                year = vehicle.get("firstRegistrationYear", "N/A")
+                country = item.get("location", {}).get("countryCode", "N/A")
+                seller = item.get("seller", {}).get("name", "Unknown")
+                lid = item.get("id", "")
+                listing_url = f"https://www.autoscout24.com/offers/{lid}" if lid else url
 
-                        keyword_parts = keyword.split()
-                        if not all(k in title.lower() for k in keyword_parts[-2:]):
-                            continue
-
-                        price_raw = (
-                            item.get("prices", {})
-                                .get("public", {})
-                                .get("priceRaw")
-                        )
-                        if not price_raw:
-                            continue
-
-                        price_eur = float(price_raw)
-                        mileage = vehicle.get("mileage", "N/A")
-                        year = vehicle.get("firstRegistrationYear", "N/A")
-                        country = item.get("location", {}).get("countryCode", "N/A")
-                        seller = item.get("seller", {}).get("name", "Unknown")
-                        lid = item.get("id", "")
-                        listing_url = f"https://www.autoscout24.com/offers/{lid}" if lid else url
-
-                        listings.append({
-                            "title": title,
-                            "price_eur": price_eur,
-                            "mileage_km": f"{mileage:,} km" if isinstance(mileage, int) else str(mileage),
-                            "year": str(year),
-                            "country": country,
-                            "seller": seller,
-                            "source": "AutoScout24",
-                            "url": listing_url,
-                        })
-                    except Exception:
-                        continue
-            except json.JSONDecodeError:
-                logger.warning(f"AutoScout24: could not parse __NEXT_DATA__ for {car_name}")
+                listings.append({
+                    "title": title,
+                    "price_eur": price_eur,
+                    "mileage_km": f"{mileage:,} km" if isinstance(mileage, int) else str(mileage),
+                    "year": str(year),
+                    "country": country,
+                    "seller": seller,
+                    "source": "AutoScout24",
+                    "url": listing_url,
+                })
+            except Exception:
+                continue
 
         if not listings:
             try:
