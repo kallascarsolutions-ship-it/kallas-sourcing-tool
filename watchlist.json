@@ -6,10 +6,7 @@
     {
       "name": "Porsche 911 GT2 RS",
       "search_query": "porsche 911 gt2 rs",
-      "autoscout24_url": "https://www.autoscout24.com/lst?fulltext=Porsche+911+GT2+RS&sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E",
-      "mobile_de_query": "Porsche 911 GT2 RS",
-      "classicdriver_query": "Porsche 911 GT2 RS",
-      "jamesedition_query": "Porsche 911 GT2 RS",
+      "autoscout24_url": "https://www.autoscout24.com/lst/porsche/911?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E&pricefrom=350000",
       "carandclassic_query": "Porsche 911 GT2 RS",
       "market_baseline_eur": 445000,
       "alert_threshold_pct": 15
@@ -17,10 +14,7 @@
     {
       "name": "Ferrari Daytona SP3",
       "search_query": "ferrari daytona sp3",
-      "autoscout24_url": "https://www.autoscout24.com/lst?fulltext=Ferrari+Daytona+SP3&sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E",
-      "mobile_de_query": "Ferrari Daytona SP3",
-      "classicdriver_query": "Ferrari Daytona SP3",
-      "jamesedition_query": "Ferrari Daytona SP3",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E&pricefrom=3000000",
       "carandclassic_query": "Ferrari Daytona SP3",
       "market_baseline_eur": 4500000,
       "alert_threshold_pct": 10
@@ -28,10 +22,7 @@
     {
       "name": "Ferrari Monza SP1",
       "search_query": "ferrari monza sp1",
-      "autoscout24_url": "https://www.autoscout24.com/lst?fulltext=Ferrari+Monza+SP1&sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E",
-      "mobile_de_query": "Ferrari Monza SP1",
-      "classicdriver_query": "Ferrari Monza SP1",
-      "jamesedition_query": "Ferrari Monza SP1",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E&pricefrom=2500000",
       "carandclassic_query": "Ferrari Monza SP1",
       "market_baseline_eur": 3200000,
       "alert_threshold_pct": 10
@@ -39,10 +30,7 @@
     {
       "name": "Ferrari Monza SP2",
       "search_query": "ferrari monza sp2",
-      "autoscout24_url": "https://www.autoscout24.com/lst?fulltext=Ferrari+Monza+SP2&sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E",
-      "mobile_de_query": "Ferrari Monza SP2",
-      "classicdriver_query": "Ferrari Monza SP2",
-      "jamesedition_query": "Ferrari Monza SP2",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E&pricefrom=2500000",
       "carandclassic_query": "Ferrari Monza SP2",
       "market_baseline_eur": 3400000,
       "alert_threshold_pct": 10
@@ -50,10 +38,7 @@
     {
       "name": "Ferrari F12 TDF",
       "search_query": "ferrari f12 tdf",
-      "autoscout24_url": "https://www.autoscout24.com/lst?fulltext=Ferrari+F12+TDF&sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E",
-      "mobile_de_query": "Ferrari F12 TDF",
-      "classicdriver_query": "Ferrari F12 TDF",
-      "jamesedition_query": "Ferrari F12 TDF",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E&pricefrom=900000",
       "carandclassic_query": "Ferrari F12 TDF",
       "market_baseline_eur": 1400000,
       "alert_threshold_pct": 10
@@ -61,10 +46,7 @@
     {
       "name": "Ferrari 812 Competizione",
       "search_query": "ferrari 812 competizione",
-      "autoscout24_url": "https://www.autoscout24.com/lst?fulltext=Ferrari+812+Competizione&sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E",
-      "mobile_de_query": "Ferrari 812 Competizione",
-      "classicdriver_query": "Ferrari 812 Competizione",
-      "jamesedition_query": "Ferrari 812 Competizione",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E&pricefrom=900000",
       "carandclassic_query": "Ferrari 812 Competizione",
       "market_baseline_eur": 1420000,
       "alert_threshold_pct": 10
@@ -72,10 +54,7 @@
     {
       "name": "Ferrari 488 Pista",
       "search_query": "ferrari 488 pista",
-      "autoscout24_url": "https://www.autoscout24.com/lst?fulltext=Ferrari+488+Pista&sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E",
-      "mobile_de_query": "Ferrari 488 Pista",
-      "classicdriver_query": "Ferrari 488 Pista",
-      "jamesedition_query": "Ferrari 488 Pista",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E&pricefrom=350000",
       "carandclassic_query": "Ferrari 488 Pista",
       "market_baseline_eur": 460000,
       "alert_threshold_pct": 15
