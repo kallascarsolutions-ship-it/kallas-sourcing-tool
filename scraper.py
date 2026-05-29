@@ -3,6 +3,7 @@ import re
 import time
 import logging
 from pathlib import Path
+import urllib.request
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -110,130 +111,107 @@ def _read_next_data(page) -> str | None:
     """)
 
 
+def _fetch_as24_via_requests(url: str, car_name: str) -> tuple[list, int]:
+    """Fetch AutoScout24 page via plain HTTP — avoids headless browser detection."""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+        if not match:
+            logger.warning(f"AutoScout24 requests: no __NEXT_DATA__ in response for {car_name}")
+            return [], 0
+        return _parse_as24_next_data(match.group(1), car_name)
+    except Exception as e:
+        logger.warning(f"AutoScout24 requests: error for {car_name}: {e}")
+        return [], 0
+
+
 def fetch_autoscout24(page, car: dict) -> list[dict]:
     url = car["autoscout24_url"]
     keyword = car["search_query"].lower()
     listings = []
     car_name = car["name"]
 
+    # Try plain HTTP first — AS24 detects headless Chromium and returns empty results
+    raw, num_results = _fetch_as24_via_requests(url, car_name)
+    logger.info(f"AutoScout24 requests: {len(raw)} items, numberOfResults={num_results} for {car_name}")
+
+    # Playwright fallback if requests got nothing
+    if not raw:
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            time.sleep(3)
+            pre_raw = _read_next_data(page)
+            raw, num_results = _parse_as24_next_data(pre_raw, car_name) if pre_raw else ([], 0)
+            logger.info(f"AutoScout24 playwright: {len(raw)} items, numberOfResults={num_results} for {car_name}")
+            dismiss_consent(page, "AutoScout24")
+            time.sleep(2)
+            if not raw:
+                post_raw = _read_next_data(page)
+                raw, num_results = _parse_as24_next_data(post_raw, car_name) if post_raw else ([], 0)
+        except Exception as e:
+            logger.warning(f"AutoScout24 playwright fallback error for {car_name}: {e}")
+
     try:
-        page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        time.sleep(3)
-
-        # Read BEFORE consent — dismissal can trigger a reload that clears listings from SSR data
-        pre_raw = _read_next_data(page)
-        raw, num_results = _parse_as24_next_data(pre_raw, car_name) if pre_raw else ([], 0)
-        logger.info(f"AutoScout24 pre-consent: {len(raw)} items, numberOfResults={num_results} for {car_name}")
-
-        dismiss_consent(page, "AutoScout24")
-        time.sleep(2)
-
-        # If pre-consent had data, use it; otherwise try again post-consent
-        if not raw:
-            post_raw = _read_next_data(page)
-            raw, num_results = _parse_as24_next_data(post_raw, car_name) if post_raw else ([], 0)
-            logger.info(f"AutoScout24 post-consent: {len(raw)} items, numberOfResults={num_results} for {car_name}")
-
         page.screenshot(path=str(SCREENSHOTS_DIR / f"as24_{car_name.replace(' ', '_')}.png"))
+    except Exception:
+        pass
 
-        if raw:
-            try:
-                logger.info(f"AutoScout24 first item keys: {list(raw[0].keys())}")
-            except Exception:
-                pass
+    logger.info(f"AutoScout24 __NEXT_DATA__: {len(raw)} raw items for {car_name}")
 
-        logger.info(f"AutoScout24 __NEXT_DATA__: {len(raw)} raw items for {car_name}")
+    for item in raw:
+        try:
+            vehicle = item.get("vehicle", {})
+            make = vehicle.get("make", "")
+            model = vehicle.get("model", "")
+            version = vehicle.get("modelVersionInput", "")
+            title = " ".join(filter(None, [make, model, version])).strip()
 
-        for item in raw:
-            try:
-                vehicle = item.get("vehicle", {})
-                make = vehicle.get("make", "")
-                model = vehicle.get("model", "")
-                version = vehicle.get("modelVersionInput", "")
-                title = " ".join(filter(None, [make, model, version])).strip()
-
-                keyword_parts = keyword.split()
-                if not all(k in title.lower() for k in keyword_parts[-2:]):
-                    continue
-
-                price_raw = (
-                    item.get("prices", {})
-                        .get("public", {})
-                        .get("priceRaw")
-                )
-                if not price_raw:
-                    continue
-
-                price_eur = float(price_raw)
-                mileage = vehicle.get("mileage", "N/A")
-                year = vehicle.get("firstRegistrationYear", "N/A")
-                country = item.get("location", {}).get("countryCode", "N/A")
-                seller = item.get("seller", {}).get("name", "Unknown")
-                lid = item.get("id", "")
-                listing_url = f"https://www.autoscout24.com/offers/{lid}" if lid else url
-
-                listings.append({
-                    "title": title,
-                    "price_eur": price_eur,
-                    "mileage_km": f"{mileage:,} km" if isinstance(mileage, int) else str(mileage),
-                    "year": str(year),
-                    "country": country,
-                    "seller": seller,
-                    "source": "AutoScout24",
-                    "url": listing_url,
-                })
-            except Exception:
+            keyword_parts = keyword.split()
+            if not all(k in title.lower() for k in keyword_parts[-2:]):
                 continue
 
-        if not listings:
-            try:
-                page.wait_for_selector("article, .cldt-summary-full-item, [data-testid='result-item']", timeout=8000)
-                cards = page.query_selector_all("article[data-testid='result-item'], .cldt-summary-full-item, article.listing-item")
-                logger.info(f"AutoScout24 fallback: {len(cards)} cards for {car_name}")
+            price_raw = (
+                item.get("prices", {})
+                    .get("public", {})
+                    .get("priceRaw")
+            )
+            if not price_raw:
+                continue
 
-                for card in cards:
-                    try:
-                        title_el = card.query_selector("h2, .cldt-summary-makemodel, [data-testid='title']")
-                        price_el = card.query_selector("[data-testid='price-label'], .cldt-price, .price-block")
-                        if not title_el or not price_el:
-                            continue
+            price_eur = float(price_raw)
+            mileage = vehicle.get("mileage", "N/A")
+            year = vehicle.get("firstRegistrationYear", "N/A")
+            country = item.get("location", {}).get("countryCode", "N/A")
+            seller = item.get("seller", {}).get("name", "Unknown")
+            lid = item.get("id", "")
+            listing_url = f"https://www.autoscout24.com/offers/{lid}" if lid else url
 
-                        title = title_el.inner_text().strip()
-                        keyword_parts = keyword.split()
-                        if not all(k in title.lower() for k in keyword_parts[-2:]):
-                            continue
-
-                        price = parse_price(price_el.inner_text())
-                        if not price:
-                            continue
-
-                        mileage_el = card.query_selector("[data-testid='mileage']")
-                        year_el = card.query_selector("[data-testid='first-registration']")
-                        country_el = card.query_selector("[data-testid='location']")
-
-                        listings.append({
-                            "title": title,
-                            "price_eur": price,
-                            "mileage_km": mileage_el.inner_text().strip() if mileage_el else "N/A",
-                            "year": year_el.inner_text().strip() if year_el else "N/A",
-                            "country": country_el.inner_text().strip() if country_el else "EU",
-                            "seller": "Dealer/Private",
-                            "source": "AutoScout24",
-                            "url": url,
-                        })
-                    except Exception:
-                        continue
-            except PlaywrightTimeout:
-                logger.warning(f"AutoScout24: no cards found for {car_name}")
-
-    except PlaywrightTimeout:
-        logger.warning(f"AutoScout24: timeout for {car_name}")
-        try:
-            page.screenshot(path=str(SCREENSHOTS_DIR / f"as24_timeout_{car_name.replace(' ', '_')}.png"))
+            listings.append({
+                "title": title,
+                "price_eur": price_eur,
+                "mileage_km": f"{mileage:,} km" if isinstance(mileage, int) else str(mileage),
+                "year": str(year),
+                "country": country,
+                "seller": seller,
+                "source": "AutoScout24",
+                "url": listing_url,
+            })
         except Exception:
-            pass
-    except Exception as e:
-        logger.warning(f"AutoScout24: error for {car_name}: {e}")
+            continue
 
     logger.info(f"AutoScout24: {len(listings)} listings for {car_name}")
     return listings
