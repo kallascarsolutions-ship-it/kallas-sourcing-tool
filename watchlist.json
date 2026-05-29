@@ -2,72 +2,64 @@
   "settings": {
     "email_to": "kallascarsolutions@gmail.com",
     "email_from": "kallascarsolutions@gmail.com",
-    "send_time_utc": "07:00",
     "default_alert_threshold_pct": 15
   },
   "cars": [
     {
       "name": "Porsche 911 GT2 RS",
-      "autoscout24_make": "porsche",
-      "autoscout24_model": "911-series-all",
-      "autoscout24_keyword": "GT2 RS",
+      "search_query": "Porsche 911 GT2 RS",
+      "autoscout24_url": "https://www.autoscout24.com/lst/porsche/911-series-all?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E,P,S,DK",
+      "classicdriver_query": "Porsche GT2 RS",
       "market_baseline_eur": 445000,
-      "alert_threshold_pct": 15,
-      "notes": "991.2 generation only"
+      "alert_threshold_pct": 15
     },
     {
       "name": "Ferrari Daytona SP3",
-      "autoscout24_make": "ferrari",
-      "autoscout24_model": "daytona",
-      "autoscout24_keyword": "SP3",
+      "search_query": "Ferrari Daytona SP3",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari/daytona?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E,P,S,DK",
+      "classicdriver_query": "Ferrari Daytona SP3",
       "market_baseline_eur": 4500000,
-      "alert_threshold_pct": 15,
-      "notes": "599 units produced"
+      "alert_threshold_pct": 15
     },
     {
       "name": "Ferrari Monza SP1",
-      "autoscout24_make": "ferrari",
-      "autoscout24_model": "monza",
-      "autoscout24_keyword": "SP1",
+      "search_query": "Ferrari Monza SP1",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari/monza?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E,P,S,DK",
+      "classicdriver_query": "Ferrari Monza SP1",
       "market_baseline_eur": 3200000,
-      "alert_threshold_pct": 12,
-      "notes": "Single seat Icona series"
+      "alert_threshold_pct": 12
     },
     {
       "name": "Ferrari Monza SP2",
-      "autoscout24_make": "ferrari",
-      "autoscout24_model": "monza",
-      "autoscout24_keyword": "SP2",
+      "search_query": "Ferrari Monza SP2",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari/monza?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E,P,S,DK",
+      "classicdriver_query": "Ferrari Monza SP2",
       "market_baseline_eur": 3400000,
-      "alert_threshold_pct": 12,
-      "notes": "Two seat Icona series"
+      "alert_threshold_pct": 12
     },
     {
       "name": "Ferrari F12 TDF",
-      "autoscout24_make": "ferrari",
-      "autoscout24_model": "f12",
-      "autoscout24_keyword": "TDF",
+      "search_query": "Ferrari F12 TDF",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari/f12-2012-2017?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E,P,S,DK",
+      "classicdriver_query": "Ferrari F12 TDF",
       "market_baseline_eur": 1400000,
-      "alert_threshold_pct": 15,
-      "notes": "799 units produced"
+      "alert_threshold_pct": 15
     },
     {
       "name": "Ferrari 812 Competizione",
-      "autoscout24_make": "ferrari",
-      "autoscout24_model": "812",
-      "autoscout24_keyword": "Competizione",
+      "search_query": "Ferrari 812 Competizione",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari/812-competizione?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E,P,S,DK",
+      "classicdriver_query": "Ferrari 812 Competizione",
       "market_baseline_eur": 1420000,
-      "alert_threshold_pct": 12,
-      "notes": "999 coupes + 599 Aperta"
+      "alert_threshold_pct": 12
     },
     {
       "name": "Ferrari 488 Pista",
-      "autoscout24_make": "ferrari",
-      "autoscout24_model": "488",
-      "autoscout24_keyword": "Pista",
+      "search_query": "Ferrari 488 Pista",
+      "autoscout24_url": "https://www.autoscout24.com/lst/ferrari/488?sort=price&desc=0&cy=D,A,B,CH,I,NL,F,E,P,S,DK",
+      "classicdriver_query": "Ferrari 488 Pista",
       "market_baseline_eur": 460000,
-      "alert_threshold_pct": 15,
-      "notes": "Also watch for Pista Spider"
+      "alert_threshold_pct": 15
     }
   ]
 }
