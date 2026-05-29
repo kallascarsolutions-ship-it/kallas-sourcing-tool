@@ -1,0 +1,27 @@
+name: KCS Daily Sourcing Scan
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # Every day at 07:00 UTC (09:00 Copenhagen summer time)
+  workflow_dispatch:        # Also allows manual trigger from GitHub UI
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run sourcing scan
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python main.py
