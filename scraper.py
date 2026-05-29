@@ -221,6 +221,8 @@ def fetch_autoscout24(page, car: dict) -> list[dict]:
 
 
 def fetch_carandclassic(page, car: dict) -> list[dict]:
+    GBP_TO_EUR = 1.17
+
     query = car.get("carandclassic_query", car["name"])
     car_name = car["name"]
     keyword = car.get("search_query", car["name"]).lower()
@@ -232,24 +234,19 @@ def fetch_carandclassic(page, car: dict) -> list[dict]:
         dismiss_consent(page, "Car and Classic")
         time.sleep(1)
 
-        # Screenshot before search so we can see the starting state
-        page.screenshot(path=str(SCREENSHOTS_DIR / f"cac_pre_{car_name.replace(' ', '_')}.png"))
-
         search_input = page.query_selector(
             "input[placeholder*='dream classic' i], "
-            "input[name='q'], "
-            "input[type='search'], "
+            "input[name='q'], input[type='search'], "
             "input[placeholder*='search' i]"
         )
         if not search_input:
             logger.warning(f"Car and Classic: search input not found for {car_name}")
+            page.screenshot(path=str(SCREENSHOTS_DIR / f"cac_{car_name.replace(' ', '_')}.png"))
             return listings
 
         search_input.click()
         search_input.fill(query)
         time.sleep(0.5)
-
-        # Try pressing Enter, then wait for navigation
         search_input.press("Enter")
         try:
             page.wait_for_load_state("networkidle", timeout=10000)
@@ -260,71 +257,58 @@ def fetch_carandclassic(page, car: dict) -> list[dict]:
         logger.info(f"Car and Classic: post-search URL: {page.url}")
         page.screenshot(path=str(SCREENSHOTS_DIR / f"cac_{car_name.replace(' ', '_')}.png"))
 
-        # Try multiple selector strategies for results
-        result_selectors = [
-            "a[href*='/classic-cars/'][class*='card' i]",
-            "a[href*='/listing/']",
-            "[class*='SearchResult']",
-            "[class*='search-result']",
-            "[class*='ListingCard']",
-            "[class*='listing-card']",
-            "article",
-        ]
+        # Listing links always point to /car/CXXXXXXX or /la/CXXXXXXX
+        links = page.query_selector_all("a[href*='/car/C'], a[href*='/la/C']")
+        logger.info(f"Car and Classic: {len(links)} listing links for {car_name}")
 
-        cards = []
-        for sel in result_selectors:
+        for link in links:
             try:
-                page.wait_for_selector(sel, timeout=3000)
-                cards = page.query_selector_all(sel)
-                if cards:
-                    logger.info(f"Car and Classic: matched selector '{sel}' — {len(cards)} elements")
-                    break
-            except PlaywrightTimeout:
-                continue
+                href = link.get_attribute("href") or ""
+                if not href:
+                    continue
+                listing_url = f"https://www.carandclassic.com{href}" if href.startswith("/") else href
 
-        if not cards:
-            logger.warning(f"Car and Classic: no cards after search for {car_name}")
-            return listings
+                link_text = link.inner_text().strip()
+                if not link_text:
+                    continue
 
-        for card in cards:
-            try:
-                title_el = card.query_selector("h2, h3, [class*='title' i], [class*='name' i], strong")
-                price_el = card.query_selector("[class*='price' i], [data-testid*='price'], strong")
-                if not title_el or not price_el:
-                    # Try inner text of the whole card as fallback
-                    card_text = card.inner_text()
-                    if not any(k in card_text.lower() for k in keyword.split()[-2:]):
-                        continue
-                    price = parse_price(card_text)
-                    if not price:
-                        continue
-                    title = card_text.split("\n")[0].strip()
-                else:
-                    title = title_el.inner_text().strip()
-                    keyword_parts = keyword.split()
-                    if not all(k in title.lower() for k in keyword_parts[-2:]):
-                        continue
-                    price = parse_price(price_el.inner_text())
-                    if not price:
-                        continue
+                # Keyword filter on card text
+                keyword_parts = keyword.split()
+                if not all(k in link_text.lower() for k in keyword_parts[-2:]):
+                    continue
 
-                year_el = card.query_selector("[class*='year' i]")
-                mileage_el = card.query_selector("[class*='mileage' i], [class*='odometer' i]")
-                location_el = card.query_selector("[class*='location' i], [class*='country' i]")
-                link_el = card.query_selector("a[href]") or (card if card.get_attribute("href") else None)
+                # Extract price: first currency symbol + digits only
+                price_match = re.search(r'([€£$])\s*([\d,]+(?:\.\d{2})?)', link_text)
+                if not price_match:
+                    continue
+                currency_symbol = price_match.group(1)
+                raw_price = parse_price(price_match.group())
+                if not raw_price:
+                    continue
+                # Convert GBP to EUR
+                price_eur = round(raw_price * GBP_TO_EUR) if currency_symbol == "£" else raw_price
 
-                listing_url = page.url
-                if link_el:
-                    href = link_el.get_attribute("href")
-                    if href:
-                        listing_url = f"https://www.carandclassic.com{href}" if href.startswith("/") else href
+                # Year: first 4-digit year in text
+                year_match = re.search(r'\b(19|20)\d{2}\b', link_text)
+                year = year_match.group() if year_match else "N/A"
+
+                # Title: year + car name
+                title = f"{year} {car_name}" if year != "N/A" else car_name
+
+                # Mileage
+                mileage_match = re.search(r'([\d,]+)\s*(miles?|km)', link_text, re.IGNORECASE)
+                mileage = mileage_match.group() if mileage_match else "N/A"
+
+                # Location: last short word/phrase before price line
+                location_match = re.search(r'\b([A-Z][a-zA-Z\s]{2,20})\b(?=.*[£€])', link_text)
+                location = location_match.group(1).strip() if location_match else "EU"
 
                 listings.append({
                     "title": title,
-                    "price_eur": price,
-                    "mileage_km": mileage_el.inner_text().strip() if mileage_el else "N/A",
-                    "year": year_el.inner_text().strip() if year_el else "N/A",
-                    "country": location_el.inner_text().strip() if location_el else "EU",
+                    "price_eur": price_eur,
+                    "mileage_km": mileage,
+                    "year": year,
+                    "country": location,
                     "seller": "Dealer/Private",
                     "source": "Car and Classic",
                     "url": listing_url,
