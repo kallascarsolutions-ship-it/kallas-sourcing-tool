@@ -232,7 +232,9 @@ def fetch_carandclassic(page, car: dict) -> list[dict]:
         dismiss_consent(page, "Car and Classic")
         time.sleep(1)
 
-        # Use the search box interactively
+        # Screenshot before search so we can see the starting state
+        page.screenshot(path=str(SCREENSHOTS_DIR / f"cac_pre_{car_name.replace(' ', '_')}.png"))
+
         search_input = page.query_selector(
             "input[placeholder*='dream classic' i], "
             "input[name='q'], "
@@ -241,55 +243,77 @@ def fetch_carandclassic(page, car: dict) -> list[dict]:
         )
         if not search_input:
             logger.warning(f"Car and Classic: search input not found for {car_name}")
-            page.screenshot(path=str(SCREENSHOTS_DIR / f"cac_{car_name.replace(' ', '_')}.png"))
             return listings
 
         search_input.click()
         search_input.fill(query)
         time.sleep(0.5)
-        search_input.press("Enter")
-        time.sleep(4)
 
+        # Try pressing Enter, then wait for navigation
+        search_input.press("Enter")
+        try:
+            page.wait_for_load_state("networkidle", timeout=10000)
+        except PlaywrightTimeout:
+            pass
+        time.sleep(2)
+
+        logger.info(f"Car and Classic: post-search URL: {page.url}")
         page.screenshot(path=str(SCREENSHOTS_DIR / f"cac_{car_name.replace(' ', '_')}.png"))
 
-        try:
-            page.wait_for_selector(
-                ".listing-card, [class*='ListingCard'], "
-                "article[class*='listing'], [data-testid='listing']",
-                timeout=8000
-            )
-        except PlaywrightTimeout:
+        # Try multiple selector strategies for results
+        result_selectors = [
+            "a[href*='/classic-cars/'][class*='card' i]",
+            "a[href*='/listing/']",
+            "[class*='SearchResult']",
+            "[class*='search-result']",
+            "[class*='ListingCard']",
+            "[class*='listing-card']",
+            "article",
+        ]
+
+        cards = []
+        for sel in result_selectors:
+            try:
+                page.wait_for_selector(sel, timeout=3000)
+                cards = page.query_selector_all(sel)
+                if cards:
+                    logger.info(f"Car and Classic: matched selector '{sel}' — {len(cards)} elements")
+                    break
+            except PlaywrightTimeout:
+                continue
+
+        if not cards:
             logger.warning(f"Car and Classic: no cards after search for {car_name}")
             return listings
 
-        cards = page.query_selector_all(
-            ".listing-card, [class*='ListingCard'], "
-            "article[class*='listing'], [data-testid='listing-card']"
-        )
-        logger.info(f"Car and Classic: {len(cards)} cards for {car_name}")
-
         for card in cards:
             try:
-                title_el = card.query_selector("h2, h3, [class*='title' i], [class*='name' i]")
-                price_el = card.query_selector("[class*='price' i], [data-testid*='price']")
+                title_el = card.query_selector("h2, h3, [class*='title' i], [class*='name' i], strong")
+                price_el = card.query_selector("[class*='price' i], [data-testid*='price'], strong")
                 if not title_el or not price_el:
-                    continue
-
-                title = title_el.inner_text().strip()
-                keyword_parts = keyword.split()
-                if not all(k in title.lower() for k in keyword_parts[-2:]):
-                    continue
-
-                price = parse_price(price_el.inner_text())
-                if not price:
-                    continue
+                    # Try inner text of the whole card as fallback
+                    card_text = card.inner_text()
+                    if not any(k in card_text.lower() for k in keyword.split()[-2:]):
+                        continue
+                    price = parse_price(card_text)
+                    if not price:
+                        continue
+                    title = card_text.split("\n")[0].strip()
+                else:
+                    title = title_el.inner_text().strip()
+                    keyword_parts = keyword.split()
+                    if not all(k in title.lower() for k in keyword_parts[-2:]):
+                        continue
+                    price = parse_price(price_el.inner_text())
+                    if not price:
+                        continue
 
                 year_el = card.query_selector("[class*='year' i]")
                 mileage_el = card.query_selector("[class*='mileage' i], [class*='odometer' i]")
                 location_el = card.query_selector("[class*='location' i], [class*='country' i]")
-                link_el = card.query_selector("a[href]")
+                link_el = card.query_selector("a[href]") or (card if card.get_attribute("href") else None)
 
-                listing_url = "https://www.carandclassic.com/search/"
+                listing_url = page.url
                 if link_el:
                     href = link_el.get_attribute("href")
                     if href:
