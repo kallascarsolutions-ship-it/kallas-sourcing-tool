@@ -3,7 +3,7 @@ import re
 import time
 import logging
 from pathlib import Path
-import urllib.request
+import requests as http_requests
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -121,17 +121,15 @@ def _fetch_as24_via_requests(url: str, car_name: str) -> tuple[list, int]:
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-GB,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
     }
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
+        resp = http_requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+        html = resp.text
         match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
         if not match:
-            logger.warning(f"AutoScout24 requests: no __NEXT_DATA__ in response for {car_name}")
+            logger.warning(f"AutoScout24 requests: no __NEXT_DATA__ in response for {car_name} (status={resp.status_code})")
             return [], 0
         return _parse_as24_next_data(match.group(1), car_name)
     except Exception as e:
