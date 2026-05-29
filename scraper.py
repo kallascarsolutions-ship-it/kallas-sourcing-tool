@@ -1,228 +1,264 @@
-import requests
-from bs4 import BeautifulSoup
 import json
 import re
 import time
 import logging
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-}
 
-EU_COUNTRIES = "D,A,B,CH,I,NL,F,E,P,S,DK,N,FIN"
+def get_browser_page(playwright):
+    browser = playwright.chromium.launch(headless=True)
+    context = browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        locale="en-US",
+        viewport={"width": 1280, "height": 800},
+    )
+    page = context.new_page()
+    return browser, page
 
 
-def fetch_autoscout24(make: str, model: str, keyword: str) -> list[dict]:
-    """Search AutoScout24 and return matching listings as dicts."""
-    url = f"https://www.autoscout24.com/lst/{make}/{model}"
-    params = {
-        "sort": "price",
-        "desc": "0",
-        "cy": EU_COUNTRIES,
-        "ustate": "N,U",
-    }
+def parse_price(text: str) -> float | None:
+    """Extract a numeric price from a string like '€ 1,290,000' or '1.290.000'."""
+    text = text.replace("\xa0", "").replace(" ", "")
+    # Remove currency symbols
+    text = re.sub(r"[€$£]", "", text)
+    # Handle European format (1.290.000 or 1,290,000)
+    numbers = re.findall(r"[\d][0-9.,]+", text)
+    if not numbers:
+        return None
+    raw = numbers[0].replace(".", "").replace(",", "")
+    try:
+        val = float(raw)
+        return val if val > 5000 else None
+    except ValueError:
+        return None
 
+
+def fetch_autoscout24(page, car: dict) -> list[dict]:
+    """Scrape AutoScout24 listings using Playwright."""
+    url = car["autoscout24_url"]
+    keyword = car["search_query"].lower()
     listings = []
 
     try:
-        resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logger.warning(f"AutoScout24 request failed for {make}/{model}: {e}")
-        return listings
+        page.goto(url, timeout=30000)
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        time.sleep(2)
 
-    soup = BeautifulSoup(resp.text, "lxml")
+        # Try to extract from __NEXT_DATA__
+        next_data_raw = page.evaluate("""
+            () => {
+                const el = document.getElementById('__NEXT_DATA__');
+                return el ? el.textContent : null;
+            }
+        """)
 
-    # AutoScout24 embeds listing data in __NEXT_DATA__ JSON
-    next_data_tag = soup.find("script", {"id": "__NEXT_DATA__"})
-    if not next_data_tag:
-        logger.warning(f"No __NEXT_DATA__ found for {make}/{model}")
-        return listings
+        if next_data_raw:
+            data = json.loads(next_data_raw)
+            raw_listings = (
+                data.get("props", {})
+                    .get("pageProps", {})
+                    .get("listings", [])
+            )
 
-    try:
-        data = json.loads(next_data_tag.string)
-        raw_listings = (
-            data.get("props", {})
-                .get("pageProps", {})
-                .get("listings", [])
-        )
-    except (json.JSONDecodeError, AttributeError) as e:
-        logger.warning(f"Failed to parse __NEXT_DATA__ for {make}/{model}: {e}")
-        return listings
+            for item in raw_listings:
+                try:
+                    vehicle = item.get("vehicle", {})
+                    title = " ".join(filter(None, [
+                        vehicle.get("make", ""),
+                        vehicle.get("model", ""),
+                        vehicle.get("modelVersionInput", ""),
+                    ])).strip()
 
-    keyword_lower = keyword.lower()
+                    # Keyword filter
+                    if not any(k in title.lower() for k in keyword.split()):
+                        continue
 
-    for item in raw_listings:
-        try:
-            title = (
-                f"{item.get('vehicle', {}).get('make', '')} "
-                f"{item.get('vehicle', {}).get('model', '')} "
-                f"{item.get('vehicle', {}).get('modelVersionInput', '')}"
-            ).strip()
+                    price_raw = (
+                        item.get("prices", {})
+                            .get("public", {})
+                            .get("priceRaw")
+                    )
+                    if not price_raw:
+                        continue
 
-            # Filter by keyword so e.g. "GT2 RS" doesn't match a base 911
-            if keyword_lower not in title.lower():
-                continue
+                    price_eur = float(price_raw)
+                    mileage = vehicle.get("mileage", "N/A")
+                    year = vehicle.get("firstRegistrationYear", "N/A")
+                    country = item.get("location", {}).get("countryCode", "N/A")
+                    seller = item.get("seller", {}).get("name", "Unknown")
+                    listing_id = item.get("id", "")
+                    listing_url = (
+                        f"https://www.autoscout24.com/offers/{listing_id}"
+                        if listing_id else "N/A"
+                    )
 
-            price_raw = item.get("prices", {}).get("public", {}).get("priceRaw")
-            if not price_raw:
-                continue
+                    listings.append({
+                        "title": title,
+                        "price_eur": price_eur,
+                        "mileage_km": f"{mileage:,} km" if isinstance(mileage, int) else str(mileage),
+                        "year": str(year),
+                        "country": country,
+                        "seller": seller,
+                        "source": "AutoScout24",
+                        "url": listing_url,
+                    })
 
-            price_eur = float(price_raw)
-            mileage = item.get("vehicle", {}).get("mileage", "N/A")
-            year = item.get("vehicle", {}).get("firstRegistrationYear", "N/A")
-            country = item.get("location", {}).get("countryCode", "N/A")
-            seller = item.get("seller", {}).get("name", "Private / Unknown")
-            listing_id = item.get("id", "")
-            listing_url = f"https://www.autoscout24.com/offers/{listing_id}" if listing_id else "N/A"
+                except (KeyError, TypeError, ValueError):
+                    continue
 
-            listings.append({
-                "title": title,
-                "price_eur": price_eur,
-                "mileage_km": mileage,
-                "year": year,
-                "country": country,
-                "seller": seller,
-                "source": "AutoScout24",
-                "url": listing_url,
-            })
+        # Fallback: parse visible listing cards
+        if not listings:
+            cards = page.query_selector_all("article[data-testid='result-item'], .cldt-summary-full-item")
+            for card in cards:
+                try:
+                    title_el = card.query_selector("h2, .cldt-summary-makemodel")
+                    price_el = card.query_selector("[data-testid='price-label'], .cldt-price")
+                    if not title_el or not price_el:
+                        continue
 
-        except (KeyError, TypeError, ValueError):
-            continue
+                    title = title_el.inner_text().strip()
+                    if not any(k in title.lower() for k in keyword.split()):
+                        continue
 
-    logger.info(f"AutoScout24: found {len(listings)} listings for {make}/{model} ({keyword})")
+                    price = parse_price(price_el.inner_text())
+                    if not price:
+                        continue
+
+                    mileage_el = card.query_selector("[data-testid='mileage'], .cldt-mileage")
+                    year_el = card.query_selector("[data-testid='first-registration'], .cldt-first-registration")
+
+                    listings.append({
+                        "title": title,
+                        "price_eur": price,
+                        "mileage_km": mileage_el.inner_text().strip() if mileage_el else "N/A",
+                        "year": year_el.inner_text().strip() if year_el else "N/A",
+                        "country": "EU",
+                        "seller": "Dealer/Private",
+                        "source": "AutoScout24",
+                        "url": url,
+                    })
+                except Exception:
+                    continue
+
+    except PlaywrightTimeout:
+        logger.warning(f"AutoScout24 timed out for {car['name']}")
+    except Exception as e:
+        logger.warning(f"AutoScout24 error for {car['name']}: {e}")
+
+    logger.info(f"AutoScout24: {len(listings)} listings for {car['name']}")
     return listings
 
 
-def fetch_classicdriver(keyword: str) -> list[dict]:
-    """Search Classic Driver for a given keyword."""
-    url = "https://www.classicdriver.com/en/cars"
-    params = {
-        "fulltext": keyword,
-        "sort_by": "price",
-        "sort_order": "asc",
-    }
-
+def fetch_classicdriver(page, car: dict) -> list[dict]:
+    """Scrape Classic Driver listings using Playwright."""
+    query = car["classicdriver_query"].replace(" ", "+")
+    url = f"https://www.classicdriver.com/en/cars?fulltext={query}&sort_by=price&sort_order=asc"
     listings = []
 
     try:
-        resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logger.warning(f"Classic Driver request failed for '{keyword}': {e}")
-        return listings
+        page.goto(url, timeout=30000)
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        time.sleep(2)
 
-    soup = BeautifulSoup(resp.text, "lxml")
+        cards = page.query_selector_all(".listing-item, article.car-listing, .cldt-listing")
+        for card in cards:
+            try:
+                title_el = card.query_selector("h2, h3, .listing-title, .car-title")
+                price_el = card.query_selector(".listing-price, .price, .car-price")
+                if not title_el or not price_el:
+                    continue
 
-    for card in soup.select(".listing-item, .car-listing, article.listing"):
-        try:
-            title_el = card.select_one("h2, h3, .title, .car-title")
-            price_el = card.select_one(".price, .listing-price")
-            year_el = card.select_one(".year, .first-registration")
-            mileage_el = card.select_one(".mileage, .km")
-            location_el = card.select_one(".location, .country")
+                title = title_el.inner_text().strip()
+                price = parse_price(price_el.inner_text())
+                if not price:
+                    continue
 
-            if not title_el or not price_el:
+                year_el = card.query_selector(".year, .listing-year")
+                mileage_el = card.query_selector(".mileage, .listing-mileage")
+                location_el = card.query_selector(".location, .listing-location")
+
+                listings.append({
+                    "title": title,
+                    "price_eur": price,
+                    "mileage_km": mileage_el.inner_text().strip() if mileage_el else "N/A",
+                    "year": year_el.inner_text().strip() if year_el else "N/A",
+                    "country": location_el.inner_text().strip() if location_el else "EU",
+                    "seller": "Dealer/Private",
+                    "source": "Classic Driver",
+                    "url": url,
+                })
+            except Exception:
                 continue
 
-            title = title_el.get_text(strip=True)
-            price_text = price_el.get_text(strip=True)
+    except PlaywrightTimeout:
+        logger.warning(f"Classic Driver timed out for {car['name']}")
+    except Exception as e:
+        logger.warning(f"Classic Driver error for {car['name']}: {e}")
 
-            # Extract numeric price
-            price_numbers = re.findall(r"[\d,\.]+", price_text.replace("\xa0", ""))
-            if not price_numbers:
-                continue
-            price_eur = float(price_numbers[0].replace(",", "").replace(".", ""))
-            if price_eur < 10000:
-                continue
-
-            listings.append({
-                "title": title,
-                "price_eur": price_eur,
-                "mileage_km": mileage_el.get_text(strip=True) if mileage_el else "N/A",
-                "year": year_el.get_text(strip=True) if year_el else "N/A",
-                "country": location_el.get_text(strip=True) if location_el else "N/A",
-                "seller": "Dealer / Private",
-                "source": "Classic Driver",
-                "url": "classicdriver.com",
-            })
-
-        except (AttributeError, ValueError):
-            continue
-
-    logger.info(f"Classic Driver: found {len(listings)} listings for '{keyword}'")
+    logger.info(f"Classic Driver: {len(listings)} listings for {car['name']}")
     return listings
 
 
-def scan_car(car: dict) -> list[dict]:
-    """Run all scrapers for a single car config and return flagged deals."""
-    name = car["name"]
+def scan_car(playwright, car: dict) -> list[dict]:
+    """Scan all sources for a single car and return flagged deals."""
     baseline = car["market_baseline_eur"]
     threshold = car.get("alert_threshold_pct", 15)
     cutoff = baseline * (1 - threshold / 100)
 
-    logger.info(f"Scanning: {name} | Baseline: €{baseline:,.0f} | Alert below: €{cutoff:,.0f}")
+    logger.info(f"Scanning: {car['name']} | Baseline: €{baseline:,.0f} | Alert below: €{cutoff:,.0f}")
 
+    browser, page = get_browser_page(playwright)
     all_listings = []
 
-    # AutoScout24 (primary EU source)
-    all_listings += fetch_autoscout24(
-        car["autoscout24_make"],
-        car["autoscout24_model"],
-        car["autoscout24_keyword"],
-    )
+    try:
+        all_listings += fetch_autoscout24(page, car)
+        time.sleep(1)
+        all_listings += fetch_classicdriver(page, car)
+    finally:
+        browser.close()
 
-    # Classic Driver (secondary — collector/rare cars)
-    all_listings += fetch_classicdriver(car["name"])
-
-    # Deduplicate by approximate price + title
+    # Deduplicate
     seen = set()
     unique = []
     for l in all_listings:
-        key = (l["title"][:30].lower(), int(l["price_eur"] / 1000))
+        key = (l["title"][:25].lower(), int(l["price_eur"] / 5000))
         if key not in seen:
             seen.add(key)
             unique.append(l)
 
-    # Flag deals below threshold
+    # Flag deals
     deals = []
     for listing in unique:
         price = listing["price_eur"]
         if price <= 0:
             continue
-        discount_pct = round((baseline - price) / baseline * 100, 1)
         if price <= cutoff:
-            listing["car_name"] = name
+            listing["car_name"] = car["name"]
             listing["market_baseline_eur"] = baseline
-            listing["discount_pct"] = discount_pct
+            listing["discount_pct"] = round((baseline - price) / baseline * 100, 1)
             deals.append(listing)
 
     deals.sort(key=lambda x: x["price_eur"])
-    logger.info(f"{name}: {len(deals)} deal(s) flagged below threshold")
+    logger.info(f"{car['name']}: {len(deals)} deal(s) flagged")
     return deals
 
 
 def run_full_scan(watchlist_path: str = "watchlist.json") -> dict:
-    """Run the full scan across all cars in the watchlist."""
     with open(watchlist_path, "r") as f:
         config = json.load(f)
 
     results = {}
 
-    for car in config["cars"]:
-        deals = scan_car(car)
-        results[car["name"]] = deals
-        time.sleep(2)  # Polite delay between requests
+    with sync_playwright() as playwright:
+        for car in config["cars"]:
+            results[car["name"]] = scan_car(playwright, car)
+            time.sleep(3)
 
     return results
