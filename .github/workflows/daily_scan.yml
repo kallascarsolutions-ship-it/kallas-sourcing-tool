@@ -2,8 +2,11 @@ name: KCS Daily Sourcing Scan
 
 on:
   schedule:
-    - cron: "0 7 * * *"   # Every day at 07:00 UTC (09:00 Copenhagen summer time)
-  workflow_dispatch:        # Manual trigger from GitHub Actions tab
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   scan:
@@ -25,6 +28,20 @@ jobs:
         run: playwright install chromium --with-deps
 
       - name: Run sourcing scan
-        env:
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python main.py
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: debug_screenshots/
+          retention-days: 3
+
+      - name: Commit CSV report to repo
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "KCS Sourcing Bot"
+          git add reports/
+          git diff --staged --quiet || git commit -m "Sourcing report $(date +%Y-%m-%d)"
+          git push
