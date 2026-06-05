@@ -73,13 +73,25 @@ def fetch_carandclassic(page, car: dict) -> list[dict]:
 
         logger.info(f"Car and Classic: post-search URL: {page.url}")
 
+        # Wait a bit longer for JS-rendered results
+        time.sleep(3)
+
         # Collect unique listing links from the search results page
         all_links = page.query_selector_all("a[href]")
+        all_hrefs = [l.get_attribute("href") for l in all_links if l.get_attribute("href")]
+
+        # Debug: log sample hrefs so we can identify the correct URL pattern
+        logger.info(f"Car and Classic: sample hrefs — {all_hrefs[:15]}")
+
         seen = set()
         listing_hrefs = []
-        for link in all_links:
-            href = link.get_attribute("href") or ""
-            if "/listing/" in href or "/classic-cars/" in href:
+        for href in all_hrefs:
+            if any([
+                "/listing/" in href,
+                "/classic-cars/" in href,
+                "/l/" in href,
+                re.search(r"/[A-Z][0-9]{5,}", href),
+            ]):
                 full = href if href.startswith("http") else f"https://www.carandclassic.com{href}"
                 if full not in seen:
                     seen.add(full)
@@ -345,13 +357,20 @@ def fetch_jamesedition(page, car: dict) -> list[dict]:
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         time.sleep(2)
 
+        # Wait for JS-rendered results
+        time.sleep(3)
+
         # Collect unique listing links — JamesEdition URLs: /cars/{make}/{model}/{year}/{id}/
         all_links = page.query_selector_all("a[href]")
+        all_hrefs = [l.get_attribute("href") for l in all_links if l.get_attribute("href")]
+
+        # Debug: log sample hrefs so we can identify the correct URL pattern
+        logger.info(f"JamesEdition: sample hrefs — {all_hrefs[:15]}")
+
         seen = set()
         listing_hrefs = []
-        for link in all_links:
-            href = link.get_attribute("href") or ""
-            if re.match(r"^/cars/[^/]+/[^/]+/", href):
+        for href in all_hrefs:
+            if re.match(r"^/cars/[^/]+/[^/]+/", href) or re.match(r"^/[a-z]+-for-sale/", href):
                 full = f"https://www.jamesedition.com{href}"
                 if full not in seen:
                     seen.add(full)
@@ -448,22 +467,3 @@ def scan_car(playwright, car: dict) -> list[dict]:
             listing["car_name"] = car["name"]
             listing["market_baseline_eur"] = baseline
             listing["discount_pct"] = round((baseline - price) / baseline * 100, 1)
-            deals.append(listing)
-
-    deals.sort(key=lambda x: x["price_eur"])
-    logger.info(f"{car['name']}: {len(deals)} deal(s) flagged")
-    return deals
-
-
-def run_full_scan(watchlist_path: str = "watchlist.json") -> dict:
-    with open(watchlist_path, "r") as f:
-        config = json.load(f)
-
-    results = {}
-
-    with sync_playwright() as playwright:
-        for car in config["cars"]:
-            results[car["name"]] = scan_car(playwright, car)
-            time.sleep(3)
-
-    return results
