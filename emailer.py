@@ -59,7 +59,7 @@ def build_html_email(results: dict) -> str:
     &nbsp;·&nbsp;
     Deals flagged today: <strong>{total_deals}</strong>
     &nbsp;·&nbsp;
-    Sources: AutoScout24 · Classic Driver
+    Sources: AutoScout24 · Classic Driver · Mobile.de · JamesEdition
   </div>
 """
 
