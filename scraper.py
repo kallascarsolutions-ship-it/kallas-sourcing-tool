@@ -25,7 +25,6 @@ def get_browser_page(playwright):
 
 
 def parse_price(text: str) -> float | None:
-    """Extract a numeric price from a string like '€ 1,290,000' or '1.290.000'."""
     text = text.replace("\xa0", "").replace(" ", "")
     text = re.sub(r"[€$£]", "", text)
     numbers = re.findall(r"[\d][0-9.,]+", text)
@@ -39,6 +38,109 @@ def parse_price(text: str) -> float | None:
         return None
 
 
+def dismiss_consent(page, timeout=3000):
+    selectors = (
+        "#onetrust-accept-btn-handler, "
+        "button[data-testid='accept-all-cookies'], "
+        "button[id*='accept'], "
+        "button[class*='accept-all'], "
+        "#mde-consent-accept-btn, "
+        "[class*='consent'] button:first-child"
+    )
+    try:
+        page.click(selectors, timeout=timeout)
+        time.sleep(1)
+        return True
+    except Exception:
+        return False
+
+
+# ── Car and Classic ───────────────────────────────────────────────────────────
+
+def fetch_carandclassic(page, car: dict) -> list[dict]:
+    query = car.get("carandclassic_query", car["search_query"])
+    search_url = f"https://www.carandclassic.com/search?q={quote(query)}&sort_by=price_asc"
+    listings = []
+
+    try:
+        page.goto(search_url, timeout=30000)
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        time.sleep(2)
+
+        if dismiss_consent(page):
+            logger.info("Car and Classic: dismissed consent banner")
+            time.sleep(1)
+
+        logger.info(f"Car and Classic: post-search URL: {page.url}")
+
+        # Collect unique listing links from the search results page
+        all_links = page.query_selector_all("a[href]")
+        seen = set()
+        listing_hrefs = []
+        for link in all_links:
+            href = link.get_attribute("href") or ""
+            if "/listing/" in href or "/classic-cars/" in href:
+                full = href if href.startswith("http") else f"https://www.carandclassic.com{href}"
+                if full not in seen:
+                    seen.add(full)
+                    listing_hrefs.append(full)
+
+        logger.info(f"Car and Classic: {len(listing_hrefs)} listing links for {car['name']}")
+
+        # Visit each listing page and extract data
+        for url in listing_hrefs[:20]:
+            try:
+                page.goto(url, timeout=20000)
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+                time.sleep(0.5)
+
+                title_el = page.query_selector("h1")
+                price_el = page.query_selector(
+                    "[class*='price']:not([class*='original']):not([class*='was']), "
+                    "[data-testid*='price'], "
+                    ".asking-price"
+                )
+
+                if not title_el or not price_el:
+                    continue
+
+                title = title_el.inner_text().strip()
+                price = parse_price(price_el.inner_text())
+                if not price:
+                    continue
+
+                body_text = page.inner_text("body")
+                km_match = re.search(r'(\d[\d,]+)\s*km', body_text, re.IGNORECASE)
+                mi_match = re.search(r'(\d[\d,]+)\s*miles', body_text, re.IGNORECASE)
+                yr_match = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', title)
+
+                mileage = (km_match or mi_match)
+                location_el = page.query_selector("[class*='location'], [class*='country']")
+
+                listings.append({
+                    "title": title,
+                    "price_eur": price,
+                    "mileage_km": mileage.group(0).strip() if mileage else "N/A",
+                    "year": yr_match.group(0) if yr_match else "N/A",
+                    "country": location_el.inner_text().strip() if location_el else "UK",
+                    "seller": "Dealer/Private",
+                    "source": "Car and Classic",
+                    "url": url,
+                })
+            except Exception:
+                continue
+
+    except PlaywrightTimeout:
+        logger.warning(f"Car and Classic timed out for {car['name']}")
+    except Exception as e:
+        logger.warning(f"Car and Classic error for {car['name']}: {e}")
+
+    logger.info(f"Car and Classic: {len(listings)} listings for {car['name']}")
+    return listings
+
+
+# ── AutoScout24 ───────────────────────────────────────────────────────────────
+
 def fetch_autoscout24(page, car: dict) -> list[dict]:
     url = car["autoscout24_url"]
     keyword = car["search_query"].lower()
@@ -48,6 +150,9 @@ def fetch_autoscout24(page, car: dict) -> list[dict]:
         page.goto(url, timeout=30000)
         page.wait_for_load_state("domcontentloaded", timeout=15000)
         time.sleep(2)
+
+        if dismiss_consent(page):
+            logger.info("AutoScout24: dismissed consent banner")
 
         next_data_raw = page.evaluate("""
             () => {
@@ -63,6 +168,7 @@ def fetch_autoscout24(page, car: dict) -> list[dict]:
                     .get("pageProps", {})
                     .get("listings", [])
             )
+            logger.info(f"AutoScout24 __NEXT_DATA__: {len(raw_listings)} raw items for {car['name']}")
 
             for item in raw_listings:
                 try:
@@ -92,7 +198,7 @@ def fetch_autoscout24(page, car: dict) -> list[dict]:
                     listing_id = item.get("id", "")
                     listing_url = (
                         f"https://www.autoscout24.com/offers/{listing_id}"
-                        if listing_id else "N/A"
+                        if listing_id else url
                     )
 
                     listings.append({
@@ -105,7 +211,6 @@ def fetch_autoscout24(page, car: dict) -> list[dict]:
                         "source": "AutoScout24",
                         "url": listing_url,
                     })
-
                 except (KeyError, TypeError, ValueError):
                     continue
 
@@ -126,8 +231,8 @@ def fetch_autoscout24(page, car: dict) -> list[dict]:
                     if not price:
                         continue
 
-                    mileage_el = card.query_selector("[data-testid='mileage'], .cldt-mileage")
-                    year_el = card.query_selector("[data-testid='first-registration'], .cldt-first-registration")
+                    mileage_el = card.query_selector("[data-testid='mileage']")
+                    year_el = card.query_selector("[data-testid='first-registration']")
 
                     listings.append({
                         "title": title,
@@ -151,85 +256,7 @@ def fetch_autoscout24(page, car: dict) -> list[dict]:
     return listings
 
 
-def fetch_classicdriver(page, car: dict) -> list[dict]:
-    query = car.get("classicdriver_query", car["search_query"]).replace(" ", "+")
-    url = f"https://www.classicdriver.com/en/cars?fulltext={query}&sort_by=price&sort_order=asc"
-    keyword = car["search_query"].lower()
-    listings = []
-
-    try:
-        page.goto(url, timeout=30000)
-        page.wait_for_load_state("networkidle", timeout=20000)
-        time.sleep(2)
-
-        # Classic Driver renders server-side — try multiple card selectors
-        cards = page.query_selector_all(
-            ".listing-item, "
-            ".car-listing-card, "
-            "article.node--type-car, "
-            ".view-content .views-row, "
-            "[class*='listing-card'], "
-            "[class*='car-item']"
-        )
-
-        if not cards:
-            # Fallback: grab all articles on the page
-            cards = page.query_selector_all("article")
-
-        for card in cards:
-            try:
-                title_el = (
-                    card.query_selector("h2, h3, .field--name-title, [class*='title'], [class*='name']")
-                )
-                price_el = (
-                    card.query_selector(
-                        ".field--name-field-price, "
-                        "[class*='price'], "
-                        ".listing-price, "
-                        "span[class*='price']"
-                    )
-                )
-                if not title_el or not price_el:
-                    continue
-
-                title = title_el.inner_text().strip()
-                if not any(k in title.lower() for k in keyword.split()):
-                    continue
-
-                price = parse_price(price_el.inner_text())
-                if not price:
-                    continue
-
-                year_el = card.query_selector("[class*='year'], [class*='date'], .field--name-field-year")
-                mileage_el = card.query_selector("[class*='mileage'], [class*='km'], .field--name-field-mileage")
-                location_el = card.query_selector("[class*='location'], [class*='country'], .field--name-field-location")
-                link_el = card.query_selector("a[href*='/en/car/']")
-
-                listing_url = link_el.get_attribute("href") if link_el else url
-                if listing_url and not listing_url.startswith("http"):
-                    listing_url = "https://www.classicdriver.com" + listing_url
-
-                listings.append({
-                    "title": title,
-                    "price_eur": price,
-                    "mileage_km": mileage_el.inner_text().strip() if mileage_el else "N/A",
-                    "year": year_el.inner_text().strip() if year_el else "N/A",
-                    "country": location_el.inner_text().strip() if location_el else "EU",
-                    "seller": "Dealer/Private",
-                    "source": "Classic Driver",
-                    "url": listing_url,
-                })
-            except Exception:
-                continue
-
-    except PlaywrightTimeout:
-        logger.warning(f"Classic Driver timed out for {car['name']}")
-    except Exception as e:
-        logger.warning(f"Classic Driver error for {car['name']}: {e}")
-
-    logger.info(f"Classic Driver: {len(listings)} listings for {car['name']}")
-    return listings
-
+# ── Mobile.de ─────────────────────────────────────────────────────────────────
 
 def fetch_mobileDE(page, car: dict) -> list[dict]:
     query = car.get("mobileDE_query", car["search_query"])
@@ -244,22 +271,23 @@ def fetch_mobileDE(page, car: dict) -> list[dict]:
 
     try:
         page.goto(url, timeout=30000)
-        page.wait_for_load_state("networkidle", timeout=20000)
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
         time.sleep(3)
 
-        # Dismiss cookie banner if present
-        try:
-            page.click("[id*='consent'] button, [class*='consent'] button, #mde-consent-accept-btn", timeout=3000)
+        if dismiss_consent(page):
+            logger.info("Mobile.de: dismissed consent banner")
             time.sleep(1)
-        except Exception:
-            pass
 
         articles = page.query_selector_all("article")
 
         for article in articles:
             try:
                 title_el = article.query_selector("h2, h3")
-                price_el = article.query_selector("[data-testid='vip-price-label'], [class*='price-label'], [class*='price']")
+                price_el = article.query_selector(
+                    "[data-testid='vip-price-label'], "
+                    "[class*='price-label'], "
+                    "[class*='price']"
+                )
                 if not title_el or not price_el:
                     continue
 
@@ -271,22 +299,9 @@ def fetch_mobileDE(page, car: dict) -> list[dict]:
                 if not price:
                     continue
 
-                # Try data-testid selectors for mileage/year, fall back to regex on article text
-                mileage_el = article.query_selector("[data-testid='mileage'], [data-testid='Kilometerstand']")
-                year_el = article.query_selector("[data-testid='first-registration'], [data-testid='Erstzulassung']")
-
                 article_text = article.inner_text()
-                if mileage_el:
-                    mileage = mileage_el.inner_text().strip()
-                else:
-                    m = re.search(r'(\d[\d.,]+)\s*km', article_text, re.IGNORECASE)
-                    mileage = m.group(0).strip() if m else "N/A"
-
-                if year_el:
-                    year = year_el.inner_text().strip()
-                else:
-                    y = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', article_text)
-                    year = y.group(0) if y else "N/A"
+                km_match = re.search(r'(\d[\d.,]+)\s*km', article_text, re.IGNORECASE)
+                yr_match = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', article_text)
 
                 link_el = article.query_selector("a[href*='/fahrzeuge/'], a[href*='/auto/']")
                 if link_el:
@@ -298,8 +313,8 @@ def fetch_mobileDE(page, car: dict) -> list[dict]:
                 listings.append({
                     "title": title,
                     "price_eur": price,
-                    "mileage_km": mileage,
-                    "year": year,
+                    "mileage_km": km_match.group(0).strip() if km_match else "N/A",
+                    "year": yr_match.group(0) if yr_match else "N/A",
                     "country": "DE",
                     "seller": "Dealer/Private",
                     "source": "Mobile.de",
@@ -317,114 +332,72 @@ def fetch_mobileDE(page, car: dict) -> list[dict]:
     return listings
 
 
+# ── JamesEdition ─────────────────────────────────────────────────────────────
+
 def fetch_jamesedition(page, car: dict) -> list[dict]:
     query = car.get("jamesedition_query", car["search_query"])
-    url = f"https://www.jamesedition.com/cars/?q={quote(query)}&sort=price_asc"
+    search_url = f"https://www.jamesedition.com/cars/?q={quote(query)}&sort=price_asc"
     keyword = car["search_query"].lower()
     listings = []
 
     try:
-        page.goto(url, timeout=30000)
-        page.wait_for_load_state("networkidle", timeout=20000)
+        page.goto(search_url, timeout=30000)
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
         time.sleep(2)
 
-        # JamesEdition is a React SPA — try __NEXT_DATA__ first
-        next_data_raw = page.evaluate("""
-            () => {
-                const el = document.getElementById('__NEXT_DATA__');
-                return el ? el.textContent : null;
-            }
-        """)
+        # Collect unique listing links — JamesEdition URLs: /cars/{make}/{model}/{year}/{id}/
+        all_links = page.query_selector_all("a[href]")
+        seen = set()
+        listing_hrefs = []
+        for link in all_links:
+            href = link.get_attribute("href") or ""
+            if re.match(r"^/cars/[^/]+/[^/]+/", href):
+                full = f"https://www.jamesedition.com{href}"
+                if full not in seen:
+                    seen.add(full)
+                    listing_hrefs.append(full)
 
-        if next_data_raw:
+        logger.info(f"JamesEdition: {len(listing_hrefs)} listing links for {car['name']}")
+
+        # Visit each listing page — selectors confirmed from inspect element
+        for url in listing_hrefs[:15]:
             try:
-                data = json.loads(next_data_raw)
-                items = (
-                    data.get("props", {})
-                        .get("pageProps", {})
-                        .get("listings", [])
-                    or
-                    data.get("props", {})
-                        .get("pageProps", {})
-                        .get("items", [])
-                )
-                for item in items:
-                    try:
-                        title = item.get("title") or item.get("name") or ""
-                        if not any(k in title.lower() for k in keyword.split()):
-                            continue
+                page.goto(url, timeout=20000)
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+                time.sleep(0.5)
 
-                        price_raw = (
-                            item.get("price", {}).get("amount")
-                            or item.get("price")
-                        )
-                        if not price_raw:
-                            continue
-                        price_eur = float(str(price_raw).replace(",", "").replace(".", ""))
-                        if price_eur < 5000:
-                            continue
+                title_el = page.query_selector("h1")
+                # Confirmed selector from inspect: div.je2-listing-info__price > span
+                price_el = page.query_selector(".je2-listing-info__price span")
 
-                        slug = item.get("slug") or item.get("id") or ""
-                        listing_url = f"https://www.jamesedition.com/cars/{slug}" if slug else url
-
-                        listings.append({
-                            "title": title,
-                            "price_eur": price_eur,
-                            "mileage_km": str(item.get("mileage", "N/A")),
-                            "year": str(item.get("year", "N/A")),
-                            "country": item.get("location", {}).get("country", "EU") if isinstance(item.get("location"), dict) else "EU",
-                            "seller": item.get("seller", {}).get("name", "Dealer") if isinstance(item.get("seller"), dict) else "Dealer",
-                            "source": "JamesEdition",
-                            "url": listing_url,
-                        })
-                    except (KeyError, TypeError, ValueError):
-                        continue
-            except (json.JSONDecodeError, Exception):
-                pass
-
-        # DOM fallback if JSON gave nothing
-        if not listings:
-            cards = page.query_selector_all(
-                "[class*='ListingCard'], "
-                "[class*='listing-card'], "
-                "[class*='listing-item'], "
-                "article"
-            )
-            for card in cards:
-                try:
-                    title_el = card.query_selector("h2, h3, [class*='title'], [class*='name']")
-                    price_el = card.query_selector("[class*='price'], [data-testid='price']")
-                    if not title_el or not price_el:
-                        continue
-
-                    title = title_el.inner_text().strip()
-                    if not any(k in title.lower() for k in keyword.split()):
-                        continue
-
-                    price = parse_price(price_el.inner_text())
-                    if not price:
-                        continue
-
-                    link_el = card.query_selector("a[href]")
-                    href = link_el.get_attribute("href") if link_el else ""
-                    listing_url = href if href.startswith("http") else f"https://www.jamesedition.com{href}"
-
-                    card_text = card.inner_text()
-                    y = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', card_text)
-                    m = re.search(r'(\d[\d.,]+)\s*km', card_text, re.IGNORECASE)
-
-                    listings.append({
-                        "title": title,
-                        "price_eur": price,
-                        "mileage_km": m.group(0).strip() if m else "N/A",
-                        "year": y.group(0) if y else "N/A",
-                        "country": "EU",
-                        "seller": "Dealer",
-                        "source": "JamesEdition",
-                        "url": listing_url,
-                    })
-                except Exception:
+                if not title_el or not price_el:
                     continue
+
+                title = title_el.inner_text().strip()
+                price = parse_price(price_el.inner_text())
+                if not price:
+                    continue
+
+                body_text = page.inner_text("body")
+                km_match = re.search(r'(\d[\d,]*)\s*[Kk]m', body_text)
+                yr_match = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', title)
+                location_el = page.query_selector(
+                    "[class*='je2-listing-info__location'], "
+                    "[class*='location']"
+                )
+
+                listings.append({
+                    "title": title,
+                    "price_eur": price,
+                    "mileage_km": km_match.group(0).strip() if km_match else "N/A",
+                    "year": yr_match.group(0) if yr_match else "N/A",
+                    "country": location_el.inner_text().strip() if location_el else "EU",
+                    "seller": "Dealer",
+                    "source": "JamesEdition",
+                    "url": url,
+                })
+            except Exception:
+                continue
 
     except PlaywrightTimeout:
         logger.warning(f"JamesEdition timed out for {car['name']}")
@@ -434,6 +407,8 @@ def fetch_jamesedition(page, car: dict) -> list[dict]:
     logger.info(f"JamesEdition: {len(listings)} listings for {car['name']}")
     return listings
 
+
+# ── Scan ──────────────────────────────────────────────────────────────────────
 
 def scan_car(playwright, car: dict) -> list[dict]:
     baseline = car["market_baseline_eur"]
@@ -446,9 +421,9 @@ def scan_car(playwright, car: dict) -> list[dict]:
     all_listings = []
 
     try:
-        all_listings += fetch_autoscout24(page, car)
+        all_listings += fetch_carandclassic(page, car)
         time.sleep(1)
-        all_listings += fetch_classicdriver(page, car)
+        all_listings += fetch_autoscout24(page, car)
         time.sleep(1)
         all_listings += fetch_mobileDE(page, car)
         time.sleep(1)
@@ -456,7 +431,6 @@ def scan_car(playwright, car: dict) -> list[dict]:
     finally:
         browser.close()
 
-    # Deduplicate by title prefix + price bucket
     seen = set()
     unique = []
     for l in all_listings:
