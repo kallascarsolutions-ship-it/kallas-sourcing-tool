@@ -467,7 +467,7 @@ def scan_car(playwright, car: dict) -> list[dict]:
             listing["car_name"] = car["name"]
             listing["market_baseline_eur"] = baseline
             listing["discount_pct"] = round((baseline - price) / baseline * 100, 1)
-                        deals.append(listing)
+            deals.append(listing)
 
     deals.sort(key=lambda x: x["price_eur"])
     logger.info(f"{car['name']}: {len(deals)} deal(s) flagged")
