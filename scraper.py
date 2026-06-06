@@ -467,3 +467,22 @@ def scan_car(playwright, car: dict) -> list[dict]:
             listing["car_name"] = car["name"]
             listing["market_baseline_eur"] = baseline
             listing["discount_pct"] = round((baseline - price) / baseline * 100, 1)
+                        deals.append(listing)
+
+    deals.sort(key=lambda x: x["price_eur"])
+    logger.info(f"{car['name']}: {len(deals)} deal(s) flagged")
+    return deals
+
+
+def run_full_scan(watchlist_path: str = "watchlist.json") -> dict:
+    with open(watchlist_path, "r") as f:
+        config = json.load(f)
+
+    results = {}
+
+    with sync_playwright() as playwright:
+        for car in config["cars"]:
+            results[car["name"]] = scan_car(playwright, car)
+            time.sleep(3)
+
+    return results
